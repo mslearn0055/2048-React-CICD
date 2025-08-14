@@ -19,6 +19,7 @@
     "@types/node": "^12.0.0",
     "@types/react": "^17.0.0",
     "@types/react-dom": "^17.0.0",
+    "@types/minimatch": "^5.1.2",
     "craco-less": "^1.18.0",
     "gh-pages": "^3.2.3",
     "react-scripts": "4.0.3",
