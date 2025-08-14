@@ -12,7 +12,7 @@ RUN npm install
 
 # Copy the rest of the application code to the container
 COPY . .
-RUN npm install --save-dev @types/minimatch
+RUN npm install --save-dev @types/minimatch && npm run build
 
 # Build the React app
 RUN npm run build
