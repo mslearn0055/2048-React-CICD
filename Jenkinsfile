@@ -7,44 +7,51 @@ pipeline {
             choices: ['dev', 'sqa', 'prod'],
             description: 'Select the environment to build and test'
         )
+        choice(
+            name: 'ACTION',
+            choices: ['build', 'test-xray', 'test-snyk', 'deploy'],
+            description: 'Select what action to perform'
+        )
     }
 
     stages {
         stage('Build') {
+            when { expression { params.ACTION == 'build' } }
             steps {
-                script {
-                    echo "Building for ${params.ENV}..."
-                    sh "npm install"
-                    sh "npm run build"
-                }
+                echo "🔨 Building for ${params.ENV}..."
+                sh "npm install"
+                sh "npm run build"
             }
         }
 
-        stage('Tests') {
-            parallel {
-                stage('Xray Scan') {
-                    steps {
-                        echo "Running Xray scan for ${params.ENV}..."
-                        sh "echo Xray Scan in ${params.ENV}"
-                    }
-                }
-                stage('Snyk Test') {
-                    steps {
-                        echo "Running Snyk test for ${params.ENV}..."
-                        sh "snyk test || true"
-                    }
-                }
+        stage('Xray Scan') {
+            when { expression { params.ACTION == 'test-xray' } }
+            steps {
+                echo "🔎 Running Xray scan in ${params.ENV}..."
+                sh "echo Running Xray Scan for ${params.ENV}"
             }
         }
 
-        stage('Deploy') {
-            when {
-                expression { params.ENV == 'prod' }
+        stage('Snyk Test') {
+            when { expression { params.ACTION == 'test-snyk' } }
+            steps {
+                echo "🔐 Running Snyk test in ${params.ENV}..."
+                sh "snyk test || true"
             }
+        }
+
+        stage('Deploy to Prod') {
+            when { expression { params.ENV == 'prod' && params.ACTION == 'deploy' } }
             steps {
                 echo "🚀 Deploying to Production..."
-                sh "echo Deploy to PROD server"
+                sh "echo Deploying PROD build"
             }
+        }
+    }
+
+    post {
+        always {
+            echo "✅ Pipeline finished with ENV=${params.ENV}, ACTION=${params.ACTION}"
         }
     }
 }
