@@ -24,11 +24,13 @@ pipeline {
         }
 
         stage('Build Artifact') {
+            /* 
             tools {
                 maven "${env.CICD_MAVEN_VERSION}"
                 nodejs "${env.CICD_NODE_VERSION}"
                 jdk "${env.CICD_JDK_VERSION}"
             }
+            */
             when { expression { params.Operation == 'Build' } }
             steps {
                 echo "🔨 Building artifact..."
