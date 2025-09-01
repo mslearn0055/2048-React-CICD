@@ -1,57 +1,237 @@
-pipeline {
-    agent any
+import org.json.JSONObject
 
-    parameters {
-        choice(
-            name: 'ENV',
-            choices: ['dev', 'sqa', 'prod'],
-            description: 'Select the environment to build and test'
-        )
-        choice(
-            name: 'ACTION',
-            choices: ['build', 'test-xray', 'test-snyk', 'deploy'],
-            description: 'Select what action to perform'
-        )
-    }
-
-    stages {
-        stage('Build') {
-            when { expression { params.ACTION == 'build' } }
-            steps {
-                echo "🔨 Building for ${params.ENV}..."
-                sh "npm install"
-                sh "npm run build"
+def call() {
+    pipeline {
+        options {
+            disableConcurrentBuilds()
+            timestamps()
+        }
+        agent { label 'linux' }
+        stages {
+            stage('Initiate Pipeline') {
+                steps {
+                    ci_initiatePipeline()
+                    checkout scm
+                    ci_toolsDefinition()
+                }
+            }
+            stage('Build Artifact') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        (params.'Operation' == 'Build')
+                    }
+                }
+                steps {
+                    ci_buildArtifact()
+                    stash 'cicdStash'
+                }
+            }
+            stage('Sonar Scan') {
+                agent { label "${env.SONAR_AGENT}" }
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        (params.'Operation' == 'Build')
+                    }
+                }
+                steps {
+                    cleanWs()
+                    unstash 'cicdStash'
+                    ci_scanSonar()
+                }
+            }
+            stage('Snyk Scan') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        (params.'Operation' == 'Build')
+                    }
+                }
+                steps {
+                    ci_scanSnyk()
+                }
+            }
+            stage('XRay Scan') {
+                when {
+                    expression {
+                        (params.'Operation' == 'Build')
+                    }
+                }
+                steps {
+                    ci_scanXRay()
+                }
+            }
+            stage('Quality Gate') {
+                when {
+                    expression {
+                        (params.'Operation' == 'Build')
+                    }
+                }
+                steps {
+                    ci_qualityGate()
+                }
+            }
+            stage('Artifact Upload') {
+                when {
+                    expression {
+                        (params.'Operation' == 'Build')
+                    }
+                }
+                steps {
+                    ci_uploadArtifact()
+                }
+            }
+            stage('DEV Deployment') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        ((params.'Operation' == 'Build') || (params.'Operation' == 'Deploy') && (params.'Environment' == 'DEV'))
+                    }
+                }
+                steps {
+                    cd_deployArtifact_bst('DEV', params.'Artifact Version')
+                }
+            }
+            stage('DEV SmokeTest') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        ((params.'Operation' == 'Build') || (params.'Operation' == 'Deploy' && params.'Environment' == 'DEV') || (params.'Operation' == 'Test' && params.'Environment' == 'DEV' && params.'Test Type' == 'Smoke'))
+                    }
+                }
+                steps {
+                    ct_smoke_execute('DEV')
+                }
+            }
+            stage('SQA Deployment') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        ((params.'Operation' == 'Build') || (params.'Operation' == 'Deploy') && (params.'Environment' == 'SQA'))
+                    }
+                }
+                steps {
+                    timeout(time: 5, unit: 'MINUTES') {
+                        input(message: 'Proceed to SQA Deployment?', ok: 'Proceed')
+                    }
+                    cd_deployArtifact_bst('SQA', params.'Artifact Version')
+                }
+            }
+            stage('SQA SmokeTest') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        ((params.'Operation' == 'Build') || (params.'Operation' == 'Deploy') && (params.'Environment' == 'SQA') || (params.'Operation' == 'Test') && (params.'Environment' == 'SQA') && params.'Test')
+                    }
+                }
+                steps {
+                    ct_smoke_execute('SQA')
+                }
+            }
+            stage('SQA RegressionTest') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        ((params.'Operation' == 'Build') || (params.'Operation' == 'Deploy') && (params.'Environment' == 'SQA') || (params.'Operation' == 'Test') && (params.'Environment' == 'SQA') && params.'Test Type' == 'Regression')
+                    }
+                }
+                steps {
+                    ct_regression_execute('SQA')
+                }
+            }
+            stage('ServiceNow ChangeRecord') {
+                when {
+                    expression {
+                        ((params.'Operation' == 'Build') || (params.'Operation' == 'Deploy') && (params.'CR' == '*'))
+                    }
+                }
+            }
+            stage('STG Deployment') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        (params.'Operation' == 'Deploy' && params.'Environment' == 'STG') && (params.'CR' == '*')
+                    }
+                }
+                steps {
+                    cr_snow_validate(params.'CR')
+                    cd_deployArtifact_bst('STG', params.'Artifact Version')
+                }
+                post {
+                    success {
+                        cr_snow_close(params.'CR', 'success')
+                    }
+                    failure {
+                        cr_snow_close(params.'CR', 'failure')
+                    }
+                }
+            }
+            stage('PROD Deployment') {
+                tools {
+                    maven "${env.CICD_MAVEN_VERSION}"
+                    nodeJs "${env.CICD_NODE_VERSION}"
+                    jdk "${env.CICD_JDK_VERSION}"
+                }
+                when {
+                    expression {
+                        (params.'Operation' == 'Deploy' && params.'Environment' == 'PROD') && (params.'CR' == '*')
+                    }
+                }
+                steps {
+                    cr_snow_validate(params.'CR')
+                    cd_deployArtifact_bst('PROD', params.'Artifact Version')
+                }
+                post {
+                    success {
+                        cr_snow_close(params.'CR', 'success')
+                    }
+                    failure {
+                        cr_snow_close(params.'CR', 'failure')
+                    }
+                }
             }
         }
-
-        stage('Xray Scan') {
-            when { expression { params.ACTION == 'test-xray' } }
-            steps {
-                echo "🔎 Running Xray scan in ${params.ENV}..."
-                sh "echo Running Xray Scan for ${params.ENV}"
+        post {
+            always {
+                cm_alerts_pipelineStatus()
             }
-        }
-
-        stage('Snyk Test') {
-            when { expression { params.ACTION == 'test-snyk' } }
-            steps {
-                echo "🔐 Running Snyk test in ${params.ENV}..."
-                sh "snyk test || true"
-            }
-        }
-
-        stage('Deploy to Prod') {
-            when { expression { params.ENV == 'prod' && params.ACTION == 'deploy' } }
-            steps {
-                echo "🚀 Deploying to Production..."
-                sh "echo Deploying PROD build"
-            }
-        }
-    }
-
-    post {
-        always {
-            echo "✅ Pipeline finished with ENV=${params.ENV}, ACTION=${params.ACTION}"
         }
     }
 }
